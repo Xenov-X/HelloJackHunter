@@ -4,6 +4,7 @@ using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Collections.Generic;
+using System.Linq.Expressions;
 
 namespace HelloJackHunter
 {
@@ -73,9 +74,36 @@ namespace HelloJackHunter
             }
         }
 
+        static string FindVSBinaries(string search)
+        {
+            var process = new Process
+            {
+                StartInfo = new ProcessStartInfo()
+                {
+                    //FileName = "%ProgramFiles(x86)%\\Microsoft Visual Studio\\Installer\\vswhere.exe",
+                    FileName = "c:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe",
+                    Arguments = $"-latest -find {search}",
+                    RedirectStandardOutput = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                }
+            };
+            process.Start();
+            process.WaitForExit();
+            var Path = process.StandardOutput.ReadToEnd();
+            if (process.ExitCode == 0)
+            {
+                return Path.TrimEnd(); 
+            }
+            else
+            {
+                return @"FILE NOT FOUND";
+            }
+        }
+
         static string CallDumpbin(string dllPath)
         {
-            string dumpbinPath = @"C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.37.32822\bin\Hostx64\x64\dumpbin.exe";
+            string dumpbinPath = FindVSBinaries("VC\\Tools\\MSVC\\**\\bin\\Hostx64\\x64\\dumpbin.exe");
 
             ProcessStartInfo startInfo = new ProcessStartInfo
             {
@@ -127,7 +155,7 @@ namespace HelloJackHunter
             StringBuilder sb = new StringBuilder();
             sb.AppendFormat("extern \"C\" {{\n");
             sb.AppendFormat("    __declspec(dllexport) void {0}() {{\n", functionName);
-            sb.AppendFormat("        MessageBox(NULL, L\"ZephrFish DLL Hijack in {0}\", L\"Function Call\", MB_OK);\n", functionName);
+            sb.AppendFormat("        MessageBoxW(NULL, L\"ZephrFish DLL Hijack in {0}\", L\"Function Call\", MB_OK);\n", functionName);
             sb.AppendLine("    }");
             sb.AppendLine("}");
             return sb.ToString();
@@ -139,7 +167,7 @@ namespace HelloJackHunter
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
     switch (ul_reason_for_call) {
     case DLL_PROCESS_ATTACH:
-        MessageBox(NULL, L""ZephrFish DLL Hijack in DLL_PROCESS_ATTACH"", L""DllMain Event"", MB_OK);
+        MessageBoxW(NULL, L""ZephrFish DLL Hijack in DLL_PROCESS_ATTACH"", L""DllMain Event"", MB_OK);
         break;
     case DLL_THREAD_ATTACH:
         // Code for thread attachment
@@ -155,37 +183,73 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 }";
         }
 
+
+        static string FindCL()
+        {
+            var process = new Process
+            {
+                StartInfo = new ProcessStartInfo()
+                {
+                    //FileName = "%ProgramFiles(x86)%\\Microsoft Visual Studio\\Installer\\vswhere.exe",
+                    FileName = "c:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe",
+                    Arguments = "-latest -find VC\\Tools\\MSVC\\**\\bin\\Hostx64\\x64\\cl.exe",
+                    RedirectStandardOutput = true,
+                    UseShellExecute = false,
+                    CreateNoWindow = true
+                }
+            };
+            process.Start();
+            process.WaitForExit();
+            var Path = process.StandardOutput.ReadToEnd();
+            if (process.ExitCode == 0)
+            {
+                return Path.TrimEnd();
+            }
+            else
+            {
+                return @"C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.37.32822\bin\Hostx64\x64\cl.exe";
+            }
+        }
+
+
+
         static void CompileToDll(string cppFileName)
         {
             string outputDllName = Path.ChangeExtension(cppFileName, ".dll");
-            string compilerPath = @"C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.37.32822\bin\Hostx64\x64\cl.exe";  // Replace with the actual path to cl.exe
+            string compilerPath = FindVSBinaries("VC\\Tools\\MSVC\\**\\bin\\Hostx64\\x64\\cl.exe");
             string compilerArgs = $"/LD {cppFileName} /Fe{outputDllName} /Fo{Path.GetDirectoryName(cppFileName)}\\";
+            string DevCMDPath = FindVSBinaries("VC\\Auxiliary\\Build\\vcvars64.bat");
 
-            ProcessStartInfo startInfo = new ProcessStartInfo
-            {
-                FileName = compilerPath,
-                Arguments = compilerArgs,
-                RedirectStandardOutput = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
+            Process compiler = new Process();
 
-            try
-            {
-                using (Process process = Process.Start(startInfo))
-                {
-                    using (StreamReader reader = process.StandardOutput)
-                    {
-                        Console.WriteLine(reader.ReadToEnd());
-                    }
+            compiler.StartInfo.FileName = "cmd.exe";
+            //compiler.StartInfo.WorkingDirectory = tempPath;
+            compiler.StartInfo.RedirectStandardInput = true;
+            compiler.StartInfo.RedirectStandardOutput = true;
+            compiler.StartInfo.UseShellExecute = false;
+            try { 
+                compiler.Start();
+                compiler.StandardInput.WriteLine("\"" + DevCMDPath + "\"");
+                compiler.StandardInput.WriteLine($"cl.exe {compilerArgs}");
+                compiler.StandardInput.WriteLine(@"exit");
+                string output = compiler.StandardOutput.ReadToEnd();
+                compiler.WaitForExit();
+                Console.Write(output);
+                if (compiler.ExitCode != 0 ) {
+                    compiler.Close();
+                    throw new ArgumentException("Non Zero Compilation Exit Code (Find better exception class");
                 }
-
+                compiler.Close();
                 Console.WriteLine($"Compiled {outputDllName}");
+                
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"Error compiling {cppFileName}: {ex.Message}");
             }
+
         }
+
     }
 }
+
