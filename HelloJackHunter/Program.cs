@@ -8,6 +8,15 @@ using System.Linq.Expressions;
 
 namespace HelloJackHunter
 {
+
+    public static class MyExtensions
+    {
+        public static StringBuilder Prepend(this StringBuilder sb, string content)
+        {
+            return sb.Insert(0, content + Environment.NewLine);
+        }
+    }
+
     class Program
     {
         static void Main(string[] args)
@@ -21,14 +30,21 @@ namespace HelloJackHunter
             string inputPath = args[0];
             string outputPath = args[1];
 
+            if (!Directory.Exists(outputPath)) //create output path if doesn't exist
+            {
+                Directory.CreateDirectory(outputPath);
+            }
+
             if (File.Exists(inputPath))
             {
                 // Single file
+                CreatePCH(outputPath);
                 ProcessDll(inputPath, outputPath);
             }
             else if (Directory.Exists(inputPath))
             {
                 // Directory
+                CreatePCH(outputPath);
                 foreach (string file in Directory.GetFiles(inputPath, "*.dll"))
                 {
                     ProcessDll(file, outputPath);
@@ -40,19 +56,46 @@ namespace HelloJackHunter
             }
         }
 
+        static void CreatePCH(string outputPath)
+        {
+            string output_pch = Path.Combine(outputPath, "pch.h");
+            string pch_content = @"
+#ifndef PCH_H
+#define PCH_H
+
+// add headers that you want to pre-compile here
+#pragma once
+#define UNICODE
+#define WIN32_LEAN_AND_MEAN             // Exclude rarely-used stuff from Windows headers
+// Windows Header Files
+#include <windows.h>
+
+#endif //PCH_H
+";
+            File.WriteAllText(output_pch, pch_content);
+            Console.WriteLine($"Generated {output_pch}");
+        }
+
         static void ProcessDll(string dllPath, string outputPath)
         {
             string outputFileName = Path.Combine(outputPath, Path.GetFileNameWithoutExtension(dllPath) + ".cpp");
             StringBuilder sb = new StringBuilder();
 
-            sb.AppendLine("#include <windows.h>");
             sb.AppendLine("#include \"pch.h\"");
+            sb.AppendLine("#include <windows.h>");
             sb.AppendLine("#include <iostream>");
 
             try
             {
                 string dumpbinOutput = CallDumpbin(dllPath);
                 var exportedFunctions = ParseExportedFunctions(dumpbinOutput);
+
+                foreach (string functionName in exportedFunctions)
+                {
+                    sb.Prepend($"#define {functionName} {functionName}_orig");
+                    sb.AppendLine($"#undef {functionName}");
+                }
+
 
                 foreach (string functionName in exportedFunctions)
                 {
@@ -155,7 +198,7 @@ namespace HelloJackHunter
             StringBuilder sb = new StringBuilder();
             sb.AppendFormat("extern \"C\" {{\n");
             sb.AppendFormat("    __declspec(dllexport) void {0}() {{\n", functionName);
-            sb.AppendFormat("        MessageBoxW(NULL, L\"ZephrFish DLL Hijack in {0}\", L\"Function Call\", MB_OK);\n", functionName);
+            sb.AppendFormat("        MessageBox(NULL, L\"ZephrFish DLL Hijack in {0}\", L\"Function Call\", MB_OK);\n", functionName);
             sb.AppendLine("    }");
             sb.AppendLine("}");
             return sb.ToString();
@@ -167,7 +210,7 @@ namespace HelloJackHunter
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved) {
     switch (ul_reason_for_call) {
     case DLL_PROCESS_ATTACH:
-        MessageBoxW(NULL, L""ZephrFish DLL Hijack in DLL_PROCESS_ATTACH"", L""DllMain Event"", MB_OK);
+        MessageBox(NULL, L""ZephrFish DLL Hijack in DLL_PROCESS_ATTACH"", L""DllMain Event"", MB_OK);
         break;
     case DLL_THREAD_ATTACH:
         // Code for thread attachment
@@ -217,9 +260,9 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         {
             string outputDllName = Path.ChangeExtension(cppFileName, ".dll");
             string compilerPath = FindVSBinaries("VC\\Tools\\MSVC\\**\\bin\\Hostx64\\x64\\cl.exe");
-            string compilerArgs = $"/LD {cppFileName} /Fe{outputDllName} /Fo{Path.GetDirectoryName(cppFileName)}\\";
-            string DevCMDPath = FindVSBinaries("VC\\Auxiliary\\Build\\vcvars64.bat");
-
+            string compilerArgs = $"/DYNAMICBASE \"user32.lib\" /LD {cppFileName} /Fe{outputDllName} /Fo{Path.GetDirectoryName(cppFileName)}\\";
+            string DevCMDPath = FindVSBinaries("Common7\\Tools\\VsDevCmd.bat");
+            Console.WriteLine(compilerPath + " " + compilerArgs);
             Process compiler = new Process();
 
             compiler.StartInfo.FileName = "cmd.exe";
@@ -229,13 +272,13 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
             compiler.StartInfo.UseShellExecute = false;
             try { 
                 compiler.Start();
-                compiler.StandardInput.WriteLine("\"" + DevCMDPath + "\"");
+                compiler.StandardInput.WriteLine("\"" + DevCMDPath + "\"" + " -startdir=none -arch=x64 -host_arch=x64 /no_logo");
                 compiler.StandardInput.WriteLine($"cl.exe {compilerArgs}");
                 compiler.StandardInput.WriteLine(@"exit");
                 string output = compiler.StandardOutput.ReadToEnd();
                 compiler.WaitForExit();
-                Console.Write(output);
                 if (compiler.ExitCode != 0 ) {
+                    Console.Write(output); //Only show cl.exe output if failed
                     compiler.Close();
                     throw new ArgumentException("Non Zero Compilation Exit Code (Find better exception class");
                 }
